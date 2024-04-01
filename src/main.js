@@ -25,12 +25,13 @@ class Node {
 }
 
 class Edge {
-  constructor(n1, n2, len, amul, rmul) {
+  constructor(n1, n2, len, amul, rmul, vavg = false) {
     this.n1 = n1;
     this.n2 = n2;
     this.len = len;
     this.amul = amul;
     this.rmul = rmul;
+    this.vavg = vavg;
   }
   update() {
     const sep = Vector.sub(this.n2.pos, this.n1.pos);
@@ -43,9 +44,11 @@ class Edge {
     this.n1.acc.add(sep);
     sep.mult(-1);
     this.n2.acc.add(sep);
-    const veldiff = Vector.sub(this.n2.vel, this.n1.vel);
-    this.n1.acc.add(veldiff.mult(0.4));
-    this.n2.acc.add(veldiff.mult(-0.4));
+    if(this.vavg) {
+      const veldiff = Vector.sub(this.n2.vel, this.n1.vel);
+      this.n1.acc.add(veldiff.mult(0.4));
+      this.n2.acc.add(veldiff.mult(-0.4));
+    }
   }
   draw() {
     stroke(0);
@@ -121,8 +124,10 @@ for(let i = 0; i < 40; i++) {
   nodes.push(new Node(new Vector(150, 150).add(new Vector(0, 89).rotate(pi / 20 * i)), false));
 }
 for(let i = 0; i < nodes.length; i++) {
-  edges.push(new Edge(nodes[i], nodes[(i + 1) % nodes.length], 1, amul, rmul));
+  edges.push(new Edge(nodes[i], nodes[(i + 1) % nodes.length], 1, amul, rmul, true));
 }
+
+console.log(edges.length);
 
 function shuffle(a) {
   for(let i = a.length - 1; i > 0; i--) {
@@ -152,8 +157,8 @@ for(let i = 0; i < nodes.length; i++) {
   bisectors.push(new Vector(0, 0));
 }
 
-const width = windowWidth - 50;
-const height = windowHeight - 50;
+const width = windowWidth * 2 - 50;
+const height = windowHeight * 2 - 50;
 
 const polys = [];
 polys.push(new Polygon([new Vector(-500, height - 50),
@@ -172,15 +177,86 @@ polys.push(new Polygon([new Vector(-500, -500),
                         new Vector(width + 500, -500),
                         new Vector(width + 500, 0),
                         new Vector(-500, 0),]));
-polys.push(new Polygon([new Vector(100, 400),
-                        new Vector(400, 500),
+polys.push(new Polygon([new Vector(50, 400),
+                        new Vector(200, 350),
+                        new Vector(350, 400),
+                        new Vector(300, 600),
                         new Vector(100, 600),]));
 polys.push(new Polygon([new Vector(700, -100),
                         new Vector(800, -100),
                         new Vector(800, height - 80),
                         new Vector(700, height - 80),]));
+polys.push(new Polygon([new Vector(800, 300),
+                        new Vector(1100, 280),
+                        new Vector(1100, 400),
+                        new Vector(800, 350)]));
+polys.push(new Polygon([new Vector(1150, 500),
+                        new Vector(1300, 400),
+                        new Vector(1450, 500),
+                        new Vector(1300, 600)]));
+polys.push(new Polygon([new Vector(1000, 1200),
+                        new Vector(1800, 1100),
+                        new Vector(1800, 1200),
+                        new Vector(1000, 1300)]));
+polys.push(new Polygon([new Vector(800, 1500),
+                        new Vector(1600, 1600),
+                        new Vector(1600, 1700),
+                        new Vector(800, 1600)]));
+polys.push(new Polygon([new Vector(2000, 400),
+                        new Vector(2100, 500),
+                        new Vector(2000, 600),
+                        new Vector(1900, 500)]));
+polys.push(new Polygon([new Vector(2350, 400),
+                        new Vector(2450, 500),
+                        new Vector(2350, 600),
+                        new Vector(2250, 500)]));
+polys.push(new Polygon([new Vector(2700, 400),
+                        new Vector(2800, 500),
+                        new Vector(2700, 600),
+                        new Vector(2600, 500)]));
+polys.push(new Polygon([new Vector(3050, 400),
+                        new Vector(3150, 500),
+                        new Vector(3050, 600),
+                        new Vector(2950, 500)]));
+polys.push(new Polygon([new Vector(2175, 650),
+                        new Vector(2275, 750),
+                        new Vector(2175, 850),
+                        new Vector(2075, 750)]));
+polys.push(new Polygon([new Vector(2525, 650),
+                        new Vector(2625, 750),
+                        new Vector(2525, 850),
+                        new Vector(2425, 750)]));
+polys.push(new Polygon([new Vector(2875, 650),
+                        new Vector(2975, 750),
+                        new Vector(2875, 850),
+                        new Vector(2775, 750)]));
+polys.push(new Polygon([new Vector(2350, 900),
+                        new Vector(2450, 1000),
+                        new Vector(2350, 1100),
+                        new Vector(2250, 1000)]));
+polys.push(new Polygon([new Vector(2700, 900),
+                        new Vector(2800, 1000),
+                        new Vector(2700, 1100),
+                        new Vector(2600, 1000)]));
+polys.push(new Polygon([new Vector(2525, 1150),
+                        new Vector(2625, 1250),
+                        new Vector(2525, 1350),
+                        new Vector(2425, 1250)]));
+polys.push(new Polygon([new Vector(2000, 2000),
+                        new Vector(3200, 2000),
+                        new Vector(3200, 2100),
+                        new Vector(2000, 2100)]));
+polys.push(new Polygon([new Vector(1650, 650),
+                        new Vector(1700, 650),
+                        new Vector(1700, 900),
+                        new Vector(1650, 900)]));
+polys.push(new Polygon([new Vector(500, 1000),
+                        new Vector(600, 1100),
+                        new Vector(500, 1200),
+                        new Vector(400, 1100)]));
 
-createCanvas(width, height);
+createCanvas(width / 2, height / 2);
+scale(0.5);
 
 function main() {
   background(255);
@@ -193,7 +269,7 @@ function main() {
     for(const node of nodes) {
       const d = new Vector(mouseX - pmouseX, mouseY - pmouseY);
       if(d.mag() > 10) d.setMag(10);
-      node.acc.add(d.mult(20 / max(80, Vector.sub(new Vector(mouseX, mouseY), node.pos).mag())));
+      node.acc.add(d.mult(20 / max(80, Vector.sub(new Vector(mouseX * 2, mouseY * 2), node.pos).mag())));
     }
   }
   for(const edge of edges) {
@@ -223,6 +299,9 @@ function main() {
     for(const node of nodes) {
       node.update(10);
     }
+  }
+  for(const poly of polys) {
+    poly.draw();
   }
   if(keyIsPressed) {
     for(const edge of edges) {
@@ -269,9 +348,6 @@ function main() {
     for(let i = 0; i < hull.length; i++) {
       line(h(i).x, h(i).y, h(i + 1).x, h(i + 1).y);
     }
-  }
-  for(const poly of polys) {
-    poly.draw();
   }
   // setTimeout(main, 300);
   requestAnimationFrame(main);
