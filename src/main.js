@@ -1,3 +1,4 @@
+"use strict";
 new Q5("global");
 
 const pi = Math.PI;
