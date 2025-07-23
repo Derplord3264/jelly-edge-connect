@@ -3,6 +3,10 @@ new Q5("global");
 
 const pi = Math.PI;
 
+// ============================================================================
+// SOFTBODY PHYSICS CLASSES (Mostly Unchanged, with minor tweaks)
+// ============================================================================
+
 class Node {
   constructor(pos, fixed = false) {
     this.pos = pos;
@@ -10,348 +14,361 @@ class Node {
     this.acc = new Vector(0, 0);
     this.fixed = fixed;
   }
-  update(substeps) {
-    if(this.fixed) return;
-    // if(this.acc.mag() > 5) this.acc.setMag(5);
-    // if(this.vel.mag() > 7) this.vel.setMag(7);
-    this.vel.mult(Math.pow(0.99, 1 / substeps));
+  update(substeps, friction) {
+    if (this.fixed) return;
+    this.vel.mult(Math.pow(friction, 1 / substeps));
     this.pos.add(Vector.mult(this.vel, 1 / substeps));
     this.acc.mult(0);
-  }
-  draw() {
-    stroke(0);
-    strokeWeight(8);
-    point(this.pos.x, this.pos.y);
   }
 }
 
 class Edge {
-  constructor(n1, n2, len, amul, rmul, vavg = false) {
+  constructor(n1, n2, len, amul, rmul) {
     this.n1 = n1;
     this.n2 = n2;
     this.len = len;
-    this.amul = amul;
-    this.rmul = rmul;
-    this.vavg = vavg;
+    this.amul = amul; // Attraction multiplier
+    this.rmul = rmul; // Repulsion multiplier
   }
   update() {
     const sep = Vector.sub(this.n2.pos, this.n1.pos);
     const dist = sep.mag();
-    let force;
-    if(dist < this.len) force = min(0, dist - max(6, this.len)) * rmul;
-    else force = max(0, dist - (this.len)) * amul;
+    if (dist === 0) return; // Avoid division by zero
+
+    const force = (dist - this.len) * (dist < this.len ? this.rmul : this.amul);
+
     sep.normalize();
     sep.mult(force);
     this.n1.acc.add(sep);
     sep.mult(-1);
     this.n2.acc.add(sep);
-    if(this.vavg) {
-      const veldiff = Vector.sub(this.n2.vel, this.n1.vel);
-      this.n1.acc.add(veldiff.mult(0.4));
-      this.n2.acc.add(veldiff.mult(-0.4));
-    }
-  }
-  draw() {
-    stroke(0);
-    strokeWeight(0.5);
-    line(this.n1.pos.x, this.n1.pos.y, this.n2.pos.x, this.n2.pos.y);
   }
 }
 
-function sqr(x) { return x * x }
-function dist2(v, w) { return sqr(v.x - w.x) + sqr(v.y - w.y) }
+// Helper function for collision detection
 function distToSegmentSquared(p, v, w) {
-  var l2 = dist2(v, w);
-  if (l2 == 0) return dist2(p, v);
+  var l2 = v.distSq(w);
+  if (l2 == 0) return p.distSq(v);
   var t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
   t = Math.max(0, Math.min(1, t));
-  return dist2(p, { x: v.x + t * (w.x - v.x),
-                    y: v.y + t * (w.y - v.y) });
-}
-function distToSegment(p, v, w) { return Math.sqrt(distToSegmentSquared(p, v, w)); }
-
-function decompose(vec, norm) {
-  norm.normalize();
-  const proj = norm.copy().mult(vec.dot(norm));
-  const perp = vec.copy().sub(proj);
-  return [proj, perp];
+  return p.distSq(
+    new Vector(v.x + t * (w.x - v.x), v.y + t * (w.y - v.y))
+  );
 }
 
-class Line {
-  constructor(start, end) {
-    this.start = start;
-    this.end = end;
+// ============================================================================
+// NEW JELLYBALL CLASS
+// ============================================================================
+
+const JELLO_AMUL = 0.1;   // Attraction: how much it pulls back. Lower = more stretchy.
+const JELLO_RMUL = 0.4;   // Repulsion: how much it resists compression.
+const JELLO_PRESSURE = 0.00005; // How much it tries to maintain its volume.
+const NODE_FRICTION = 0.99; // Damping/friction for nodes.
+
+class JellyBall {
+  constructor(x, y, radius, color) {
+    this.center = new Vector(x, y);
+    this.radius = radius;
+    this.color = color;
+    this.nodes = [];
+    this.edges = [];
+    this.isSettled = false;
+    this.id = random(100000); // Unique ID for tracking
+
+    // Create the nodes around the circumference
+    const numNodes = Math.ceil(radius / 4); // More nodes for bigger balls
+    for (let i = 0; i < numNodes; i++) {
+      const angle = map(i, 0, numNodes, 0, 2 * pi);
+      const pos = new Vector(x + cos(angle) * radius, y + sin(angle) * radius);
+      this.nodes.push(new Node(pos));
+    }
+
+    // Create edges connecting the nodes
+    for (let i = 0; i < numNodes; i++) {
+      // Edge to next node
+      this.edges.push(new Edge(this.nodes[i], this.nodes[(i + 1) % numNodes], radius * 2 * pi / numNodes, JELLO_AMUL, JELLO_RMUL));
+      // Add cross-bracing for stability
+      this.edges.push(new Edge(this.nodes[i], this.nodes[(i + Math.floor(numNodes / 2)) % numNodes], radius * 2, JELLO_AMUL, JELLO_RMUL));
+    }
+    
+    this.targetArea = pi * radius * radius;
   }
-  collision(node) {
-    if(distToSegment(node.pos, this.start, this.end) < 14) {
-      const [proj, perp] = decompose(node.vel, Vector.sub(this.end, this.start));
-      node.vel = perp.copy().mult(perp.angleBetween(Vector.sub(this.end, this.start).rotate(pi / 2)) < 0.1 ? -0.5 : 1).add(proj);
+
+  // Polygon area calculation from your original script
+  getArea() {
+    let total = 0;
+    const vertices = this.nodes.map(n => n.pos);
+    for (let i = 0, l = vertices.length; i < l; i++) {
+      let addX = vertices[i].x;
+      let addY = vertices[i == vertices.length - 1 ? 0 : i + 1].y;
+      let subX = vertices[i == vertices.length - 1 ? 0 : i + 1].x;
+      let subY = vertices[i].y;
+      total += (addX * addY * 0.5) - (subX * subY * 0.5);
+    }
+    return Math.abs(total);
+  }
+
+  update(gravity) {
+    // 1. Update edges (spring forces)
+    for (const edge of this.edges) {
+      edge.update();
+    }
+    
+    // 2. Apply pressure force to maintain volume
+    const area = this.getArea();
+    const pressureForce = (this.targetArea - area) * JELLO_PRESSURE;
+    for (let i = 0; i < this.nodes.length; i++) {
+        const prv = this.nodes[(i - 1 + this.nodes.length) % this.nodes.length].pos;
+        const cur = this.nodes[i].pos;
+        const nxt = this.nodes[(i + 1) % this.nodes.length].pos;
+        const norm1 = Vector.sub(cur, nxt).rotate(pi / 2).normalize();
+        const norm2 = Vector.sub(prv, cur).rotate(pi / 2).normalize();
+        const bisector = norm1.add(norm2).normalize();
+        this.nodes[i].acc.add(bisector.copy().mult(pressureForce));
+    }
+
+    // 3. Apply external forces and update nodes
+    let avgVel = new Vector(0,0);
+    for (const node of this.nodes) {
+      node.acc.add(gravity);
+      node.vel.add(node.acc);
+      node.update(SUBSTEPS, NODE_FRICTION);
+      avgVel.add(node.vel);
+    }
+    
+    // 4. Update the ball's center position
+    this.center.set(0, 0);
+    for (const node of this.nodes) {
+        this.center.add(node.pos);
+    }
+    this.center.div(this.nodes.length);
+    
+    // 5. Check if the ball has settled
+    avgVel.div(this.nodes.length);
+    if (avgVel.mag() < 0.05) {
+        this.isSettled = true;
+    } else {
+        this.isSettled = false;
     }
   }
+
   draw() {
-    stroke(0);
-    strokeWeight(20);
-    line(this.start.x, this.start.y, this.end.x, this.end.y);
-  }
-}
-
-class Polygon {
-  constructor(vertices) {
-    this.lines = [];
-    for(let i = 0; i < vertices.length; i++) {
-      this.lines.push(new Line(vertices[i], vertices[(i + 1) % vertices.length]));
-    }
-  }
-  collision(node) {
-    for(const line of this.lines) {
-      line.collision(node);
-    }
-  }
-  draw() {
-    for(const line of this.lines) {
-      line.draw();
-    }
-  }
-}
-
-const amul = 0.3;
-const rmul = 0.3;
-
-const targetArea = 25000;
-
-const nodes = [];
-const edges = [];
-for(let i = 0; i < 40; i++) {
-  nodes.push(new Node(new Vector(150, 150).add(new Vector(0, 89).rotate(pi / 20 * i)), false));
-}
-for(let i = 0; i < nodes.length; i++) {
-  edges.push(new Edge(nodes[i], nodes[(i + 1) % nodes.length], 1, amul, rmul, true));
-}
-
-console.log(edges.length);
-
-function shuffle(a) {
-  for(let i = a.length - 1; i > 0; i--) {
-    const j = floor(random(i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-}
-
-function polygonArea(vertices) {
-  let total = 0;
-
-  for(let i = 0, l = vertices.length; i < l; i++) {
-    let addX = vertices[i].x;
-    let addY = vertices[i == vertices.length - 1 ? 0 : i + 1].y;
-    let subX = vertices[i == vertices.length - 1 ? 0 : i + 1].x;
-    let subY = vertices[i].y;
-
-    total += (addX * addY * 0.5);
-    total -= (subX * subY * 0.5);
-  }
-
-  return Math.abs(total);
-}
-
-const bisectors = [];
-for(let i = 0; i < nodes.length; i++) {
-  bisectors.push(new Vector(0, 0));
-}
-
-const width = windowWidth * 2 - 50;
-const height = windowHeight * 2 - 50;
-
-const polys = [];
-polys.push(new Polygon([new Vector(-500, height - 50),
-                        new Vector(width + 500, height - 50),
-                        new Vector(width + 500, height),
-                        new Vector(-500, height),]));
-polys.push(new Polygon([new Vector(-500, -500),
-                        new Vector(0, -500),
-                        new Vector(0, height),
-                        new Vector(-500, height),]));
-polys.push(new Polygon([new Vector(width, -500),
-                        new Vector(width + 500, -500),
-                        new Vector(width + 500, height),
-                        new Vector(width, height),]));
-polys.push(new Polygon([new Vector(-500, -500),
-                        new Vector(width + 500, -500),
-                        new Vector(width + 500, 0),
-                        new Vector(-500, 0),]));
-polys.push(new Polygon([new Vector(50, 400),
-                        new Vector(200, 350),
-                        new Vector(350, 400),
-                        new Vector(300, 600),
-                        new Vector(100, 600),]));
-polys.push(new Polygon([new Vector(700, -100),
-                        new Vector(800, -100),
-                        new Vector(800, height - 80),
-                        new Vector(700, height - 80),]));
-polys.push(new Polygon([new Vector(800, 300),
-                        new Vector(1100, 280),
-                        new Vector(1100, 400),
-                        new Vector(800, 350)]));
-polys.push(new Polygon([new Vector(1150, 500),
-                        new Vector(1300, 400),
-                        new Vector(1450, 500),
-                        new Vector(1300, 600)]));
-polys.push(new Polygon([new Vector(1000, 1200),
-                        new Vector(1800, 1100),
-                        new Vector(1800, 1200),
-                        new Vector(1000, 1300)]));
-polys.push(new Polygon([new Vector(800, 1500),
-                        new Vector(1600, 1600),
-                        new Vector(1600, 1700),
-                        new Vector(800, 1600)]));
-polys.push(new Polygon([new Vector(2000, 400),
-                        new Vector(2100, 500),
-                        new Vector(2000, 600),
-                        new Vector(1900, 500)]));
-polys.push(new Polygon([new Vector(2350, 400),
-                        new Vector(2450, 500),
-                        new Vector(2350, 600),
-                        new Vector(2250, 500)]));
-polys.push(new Polygon([new Vector(2700, 400),
-                        new Vector(2800, 500),
-                        new Vector(2700, 600),
-                        new Vector(2600, 500)]));
-polys.push(new Polygon([new Vector(3050, 400),
-                        new Vector(3150, 500),
-                        new Vector(3050, 600),
-                        new Vector(2950, 500)]));
-polys.push(new Polygon([new Vector(2175, 650),
-                        new Vector(2275, 750),
-                        new Vector(2175, 850),
-                        new Vector(2075, 750)]));
-polys.push(new Polygon([new Vector(2525, 650),
-                        new Vector(2625, 750),
-                        new Vector(2525, 850),
-                        new Vector(2425, 750)]));
-polys.push(new Polygon([new Vector(2875, 650),
-                        new Vector(2975, 750),
-                        new Vector(2875, 850),
-                        new Vector(2775, 750)]));
-polys.push(new Polygon([new Vector(2350, 900),
-                        new Vector(2450, 1000),
-                        new Vector(2350, 1100),
-                        new Vector(2250, 1000)]));
-polys.push(new Polygon([new Vector(2700, 900),
-                        new Vector(2800, 1000),
-                        new Vector(2700, 1100),
-                        new Vector(2600, 1000)]));
-polys.push(new Polygon([new Vector(2525, 1150),
-                        new Vector(2625, 1250),
-                        new Vector(2525, 1350),
-                        new Vector(2425, 1250)]));
-polys.push(new Polygon([new Vector(2000, 2000),
-                        new Vector(3200, 2000),
-                        new Vector(3200, 2100),
-                        new Vector(2000, 2100)]));
-polys.push(new Polygon([new Vector(1650, 650),
-                        new Vector(1700, 650),
-                        new Vector(1700, 900),
-                        new Vector(1650, 900)]));
-polys.push(new Polygon([new Vector(500, 1000),
-                        new Vector(600, 1100),
-                        new Vector(500, 1200),
-                        new Vector(400, 1100)]));
-
-createCanvas(width / 2, height / 2);
-scale(0.5);
-
-function main() {
-  background(255);
-  stroke(0);
-  strokeWeight(2);
-  fill(100);
-  noStroke();
-  shuffle(edges);
-  if(mouseIsPressed) {
-    for(const node of nodes) {
-      const d = new Vector(mouseX - pmouseX, mouseY - pmouseY);
-      if(d.mag() > 10) d.setMag(10);
-      node.acc.add(d.mult(20 / max(80, Vector.sub(new Vector(mouseX * 2, mouseY * 2), node.pos).mag())));
-    }
-  }
-  for(const edge of edges) {
-    edge.update();
-  }
-  const area = polygonArea(nodes.map(node => node.pos));
-  for(let i = 0; i < nodes.length; i++) {
-    const prv = nodes[(i - 1 + nodes.length) % nodes.length].pos;
-    const cur = nodes[i].pos;
-    const nxt = nodes[(i + 1) % nodes.length].pos;
-    const norm1 = Vector.sub(cur, nxt).rotate(pi / 2).normalize();
-    const norm2 = Vector.sub(prv, cur).rotate(pi / 2).normalize();
-    bisectors[i] = norm1.add(norm2).normalize();
-    const force = (targetArea - area) * 0.001;
-    nodes[i].acc.add(bisectors[i].copy().mult(force));
-  }
-  for(const node of nodes) {
-    node.acc.add(new Vector(0, 0.2));
-    node.vel.add(node.acc);
-  }
-  for(let _ = 0; _ < 10; _++) {
-    for(const poly of polys) {
-      for(const node of nodes) {
-        poly.collision(node);
-      }
-    }
-    for(const node of nodes) {
-      node.update(10);
-    }
-  }
-  for(const poly of polys) {
-    poly.draw();
-  }
-  if(keyIsPressed) {
-    for(const edge of edges) {
-      edge.draw();
-    }
-    for(const node of nodes) {
-      node.draw();
-    }
-    stroke(255, 0, 0);
-    strokeWeight(1);
-    for(let i = 0; i < nodes.length; i++) {
-      const cur = nodes[i].pos;
-      const bisector = bisectors[i];
-      line(cur.x, cur.y, cur.x + bisector.x * 50, cur.y + bisector.y * 50);
-    }
-  } else {
-    let hull = nodes.map(node => node.pos);
-    fill(255);
+    // Smoothed hull drawing from your original script
+    let hull = this.nodes.map(node => node.pos);
+    fill(this.color);
     noStroke();
+    
     beginShape();
     for(const point of hull) {
       vertex(point.x, point.y);
     }
     endShape(CLOSE);
-    stroke(0);
-    strokeWeight(8);
-    const h = i => hull[(i + hull.length) % hull.length];
-    let hull2 = [];
-    for(let i = 0; i < hull.length; i++) {
-      hull2.push(h(i));
-      let num = round(h(i).dist(h(i + 1)) / 5);
-      for(let j = 1; j < num; j++) {
-        hull2.push(Vector.sub(h(i + 1), h(i)).mult(j / num).add(h(i)));
-      }
-    }
-    hull = hull2;
-    for(let _ = 0; _ < 3; _++) {
-      hull2 = [];
-      for(let i = 0; i < hull.length; i++) {
-        hull2.push(Vector.add(Vector.add(h(i), h(i + 1)), h(i - 1)).div(3));
-      }
-      hull = hull2;
-    }
-    for(let i = 0; i < hull.length; i++) {
-      line(h(i).x, h(i).y, h(i + 1).x, h(i + 1).y);
+  }
+
+  // Simple collision with other jelly balls
+  handleBallCollision(otherBall) {
+    const distVec = Vector.sub(this.center, otherBall.center);
+    const dist = distVec.mag();
+    const totalRadius = this.radius + otherBall.radius;
+    
+    if (dist < totalRadius) {
+        const overlap = totalRadius - dist;
+        const forceDir = distVec.normalize();
+        const forceMagnitude = overlap * 0.1; // Repulsion force
+        
+        for (const node of this.nodes) {
+            node.acc.add(forceDir.copy().mult(forceMagnitude));
+        }
+        for (const node of otherBall.nodes) {
+            node.acc.add(forceDir.copy().mult(-forceMagnitude));
+        }
     }
   }
-  // setTimeout(main, 300);
-  requestAnimationFrame(main);
+
+  // Simple collision with the walls
+  handleWallCollision(box) {
+    for (const node of this.nodes) {
+        // Floor
+        if (node.pos.y > box.bottom) {
+            node.pos.y = box.bottom;
+            node.vel.y *= -0.3; // Bounce
+        }
+        // Left wall
+        if (node.pos.x < box.left) {
+            node.pos.x = box.left;
+            node.vel.x *= -0.3;
+        }
+        // Right wall
+        if (node.pos.x > box.right) {
+            node.pos.x = box.right;
+            node.vel.x *= -0.3;
+        }
+    }
+  }
 }
 
-main();
+// ============================================================================
+// GAME LOGIC AND SETUP
+// ============================================================================
+
+const SUBSTEPS = 5; // Run physics this many times per frame for stability
+const GRAVITY = new Vector(0, 0.15);
+const COLORS = ['#ff6b6b', '#48dbfb', '#1dd1a1', '#feca57']; // Red, Blue, Green, Yellow
+const BOX_WIDTH = 400;
+const BOX_HEIGHT = 600;
+
+let gameBox;
+let allBalls = [];
+let currentBall = null;
+let score = 0;
+let spawnNextFrame = true;
+
+function setup() {
+  createCanvas(BOX_WIDTH, BOX_HEIGHT);
+  
+  gameBox = {
+    left: 0,
+    right: BOX_WIDTH,
+    bottom: BOX_HEIGHT,
+    top: 0
+  };
+}
+
+function spawnNewBall() {
+    const radius = random(20, 40);
+    const color = random(COLORS);
+    const x = gameBox.right / 2;
+    const y = gameBox.top - radius; // Spawn just above the screen
+    currentBall = new JellyBall(x, y, radius, color);
+    allBalls.push(currentBall);
+    spawnNextFrame = false;
+}
+
+function checkAndClearConnections() {
+    const settledBalls = allBalls.filter(b => b.isSettled);
+    if (settledBalls.length === 0) return;
+
+    // 1. Build a graph of touching, same-colored balls
+    const adj = new Map();
+    for (const ball of settledBalls) adj.set(ball.id, []);
+
+    for (let i = 0; i < settledBalls.length; i++) {
+        for (let j = i + 1; j < settledBalls.length; j++) {
+            const b1 = settledBalls[i];
+            const b2 = settledBalls[j];
+            const touchDist = b1.radius + b2.radius + 5; // 5px buffer
+            if (b1.color === b2.color && b1.center.dist(b2.center) < touchDist) {
+                adj.get(b1.id).push(b2.id);
+                adj.get(b2.id).push(b1.id);
+            }
+        }
+    }
+    
+    // 2. Find balls touching left and right walls
+    const leftWallBalls = new Set(settledBalls.filter(b => b.center.x - b.radius < gameBox.left + 5).map(b => b.id));
+    const rightWallBalls = new Set(settledBalls.filter(b => b.center.x + b.radius > gameBox.right - 5).map(b => b.id));
+
+    if (leftWallBalls.size === 0 || rightWallBalls.size === 0) return;
+
+    // 3. Use Breadth-First Search (BFS) to find a path from left to right
+    let ballsToClear = new Set();
+    const q = [];
+    const visited = new Set();
+
+    // Start BFS from all balls touching the left wall
+    for (const startId of leftWallBalls) {
+        q.push([startId, [startId]]); // [currentId, path]
+        visited.add(startId);
+    }
+    
+    let pathFound = false;
+    while (q.length > 0) {
+        const [currentId, path] = q.shift();
+
+        if (rightWallBalls.has(currentId)) {
+            // Path found! Mark all balls in this path for clearing.
+            path.forEach(id => ballsToClear.add(id));
+            pathFound = true;
+        }
+
+        const neighbors = adj.get(currentId) || [];
+        for (const neighborId of neighbors) {
+            if (!visited.has(neighborId)) {
+                visited.add(neighborId);
+                const newPath = [...path, neighborId];
+                q.push([neighborId, newPath]);
+            }
+        }
+    }
+
+    // 4. If a connection was found, clear the balls and add score
+    if (ballsToClear.size > 0) {
+        score += ballsToClear.size * 10;
+        allBalls = allBalls.filter(b => !ballsToClear.has(b.id));
+        if (currentBall && ballsToClear.has(currentBall.id)) {
+            currentBall = null; // Should not happen, but for safety
+        }
+    }
+}
+
+
+function draw() {
+    background('#383838');
+
+    // -- SPAWN LOGIC --
+    if (spawnNextFrame) {
+        spawnNewBall();
+    }
+    
+    // -- PLAYER INPUT --
+    if (currentBall) {
+        const moveSpeed = 0.5;
+        if (keyIsDown(LEFT_ARROW) || keyIsDown(65)) { // Left or A
+            for(const node of currentBall.nodes) node.acc.x -= moveSpeed;
+        }
+        if (keyIsDown(RIGHT_ARROW) || keyIsDown(68)) { // Right or D
+            for(const node of currentBall.nodes) node.acc.x += moveSpeed;
+        }
+        if (keyIsDown(DOWN_ARROW) || keyIsDown(83)) { // Down or S
+            for(const node of currentBall.nodes) node.acc.y += moveSpeed * 0.5;
+        }
+    }
+
+    // -- PHYSICS UPDATE --
+    for (let i = 0; i < SUBSTEPS; i++) {
+        // Ball-to-ball collisions
+        for (let i = 0; i < allBalls.length; i++) {
+            for (let j = i + 1; j < allBalls.length; j++) {
+                allBalls[i].handleBallCollision(allBalls[j]);
+            }
+        }
+        // Update all balls
+        for (const ball of allBalls) {
+            ball.update(GRAVITY);
+            ball.handleWallCollision(gameBox);
+        }
+    }
+
+    // -- DRAWING --
+    for (const ball of allBalls) {
+        ball.draw();
+    }
+    
+    // -- GAME STATE & CLEARING LOGIC --
+    if (currentBall && currentBall.isSettled) {
+        currentBall = null; // The ball has landed
+        checkAndClearConnections();
+        spawnNextFrame = true; // Flag to spawn a new ball
+    } else if (!currentBall && !spawnNextFrame) {
+        // If no ball is falling, and we are not about to spawn one,
+        // it means the board is static. Run one more check.
+        checkAndClearConnections();
+        spawnNextFrame = true;
+    }
+    
+    // -- UI --
+    fill(255);
+    textSize(24);
+    textAlign(CENTER, TOP);
+    text(`Score: ${score}`, width / 2, 10);
+}
