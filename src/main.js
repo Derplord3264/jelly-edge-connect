@@ -84,8 +84,8 @@ function polygonArea(vertices) {
 // NEW SOFTBODY CLASS (Wrapper for your original logic)
 // ============================================================================
 
-const AMUL = 0.3; // Original value
-const RMUL = 0.3; // Original value
+const AMUL = 0.6; // Original value
+const RMUL = 0.6; // Original value
 const SUBSTEPS = 10; // Original value
 const GRAVITY = new Vector(0, 0.2); // Original value
 
